@@ -5,14 +5,24 @@ import {
 import { ConfigService } from '@nestjs/config';
 
 export type Libro = {
-  id: number; titulo: string; autor: string;
-  anio: number | null; paginas: number | null;      // Google Books no siempre los trae
-  categoria: string; isbn13: string | null;
-  sinopsis: string; ejemplares: number;
+  id: number;
+  titulo: string;
+  autor: string;
+  anio: number | null;
+  paginas: number | null;
+  categoria: string;
+  isbn13: string | null;
+  sinopsis: string;
+  ejemplares: number;
 };
+
 export type Prestamo = {
-  id: number; libroId: number; usuarioSub: string;
-  desde: string; hasta: string; devuelto: boolean;
+  id: number;
+  libroId: number;
+  usuarioSub: string;
+  desde: string;
+  hasta: string;
+  devuelto: boolean;
 };
 
 @Injectable()
@@ -21,25 +31,32 @@ export class PanelService {
   private readonly prestamosUrl: string;
 
   constructor(config: ConfigService) {
-    this.librosUrl    = config.getOrThrow<string>('LIBROS_URL');
+    this.librosUrl = config.getOrThrow<string>('LIBROS_URL');
     this.prestamosUrl = config.getOrThrow<string>('PRESTAMOS_URL');
   }
 
-  // fetch NO lanza con un 404 ni con un 500: hay que mirar .ok a mano. Es lo de X4.
+  // fetch NO lanza con un 404 ni con un 500: hay que mirar .ok a mano.
   private async pedir<T>(url: string, nombre: string): Promise<T> {
     let respuesta: Response;
+
     try {
       respuesta = await fetch(url);
     } catch {
-      throw new ServiceUnavailableException(`el microservicio de ${nombre} no responde`);
+      throw new ServiceUnavailableException(
+        `el microservicio de ${nombre} no responde`,
+      );
     }
+
     if (!respuesta.ok) {
-      throw new ServiceUnavailableException(`el microservicio de ${nombre} devolvio ${respuesta.status}`);
+      throw new ServiceUnavailableException(
+        `el microservicio de ${nombre} devolvio ${respuesta.status}`,
+      );
     }
+
     return (await respuesta.json()) as T;
   }
 
-  // Las dos llamadas salen juntas. Acá esta el argumento entero del BFF.
+  // Las dos llamadas salen juntas.
   private async traerTodo(): Promise<[Libro[], Prestamo[]]> {
     return Promise.all([
       this.pedir<Libro[]>(this.librosUrl, 'libros'),
@@ -50,86 +67,169 @@ export class PanelService {
   // El cruce que hoy hace el navegador, hecho acá.
   private unir(prestamos: Prestamo[], libros: Libro[]) {
     const porId = new Map(libros.map((l) => [l.id, l]));
+
     return prestamos.map(({ libroId, ...resto }) => ({
       ...resto,
-      libro: porId.get(libroId) ?? { id: libroId, titulo: 'libro no encontrado' },
+      libro: porId.get(libroId) ?? {
+        id: libroId,
+        titulo: 'libro no encontrado',
+      },
     }));
   }
 
   async mios(sub: string) {
     const [libros, prestamos] = await this.traerTodo();
     const mios = prestamos.filter((p) => p.usuarioSub === sub);
-    return { total: mios.length, prestamos: this.unir(mios, libros) };
+
+    return {
+      total: mios.length,
+      prestamos: this.unir(mios, libros),
+    };
   }
 
   async todos() {
     const [libros, prestamos] = await this.traerTodo();
-    return { total: prestamos.length, prestamos: this.unir(prestamos, libros) };
+
+    return {
+      total: prestamos.length,
+      prestamos: this.unir(prestamos, libros),
+    };
   }
 
-  // Solo para medir en el 4.3. En un proyecto de verdad esto no existiria.
+  // Solo para medir en el 4.3.
   async miosEnSerie(sub: string) {
-    const libros    = await this.pedir<Libro[]>(this.librosUrl, 'libros');
-    const prestamos = await this.pedir<Prestamo[]>(this.prestamosUrl, 'prestamos');
+    const libros = await this.pedir<Libro[]>(this.librosUrl, 'libros');
+    const prestamos = await this.pedir<Prestamo[]>(
+      this.prestamosUrl,
+      'prestamos',
+    );
+
     const mios = prestamos.filter((p) => p.usuarioSub === sub);
-    return { total: mios.length, prestamos: this.unir(mios, libros) };
+
+    return {
+      total: mios.length,
+      prestamos: this.unir(mios, libros),
+    };
   }
 
-  private async enviar<T>(metodo: string, url: string, cuerpo?: unknown): Promise<T> {
+  private async enviar<T>(
+    metodo: string,
+    url: string,
+    cuerpo?: unknown,
+    authorization?: string,
+  ): Promise<T> {
     let respuesta: Response;
+
     try {
       respuesta = await fetch(url, {
         method: metodo,
-        headers: cuerpo ? { 'Content-Type': 'application/json' } : {},
+        headers: {
+          ...(cuerpo
+            ? { 'Content-Type': 'application/json' }
+            : {}),
+          ...(authorization
+            ? { Authorization: authorization }
+            : {}),
+        },
         body: cuerpo ? JSON.stringify(cuerpo) : undefined,
       });
     } catch {
-      throw new ServiceUnavailableException('el microservicio de prestamos no responde');
+      throw new ServiceUnavailableException(
+        'el microservicio de prestamos no responde',
+      );
     }
+
     if (!respuesta.ok) {
-      throw new ServiceUnavailableException(`el microservicio de prestamos devolvio ${respuesta.status}`);
+      throw new ServiceUnavailableException(
+        `el microservicio de prestamos devolvio ${respuesta.status}`,
+      );
     }
+
     return (await respuesta.json()) as T;
   }
 
-  async prestar(sub: string, libroId: unknown): Promise<Prestamo> {
+  async prestar(
+    sub: string,
+    libroId: unknown,
+    authorization?: string,
+  ): Promise<Prestamo> {
     // 1 · Lo que viene del cliente no es de fiar hasta que lo revisas.
-    if (typeof libroId !== 'number' || !Number.isInteger(libroId) || libroId < 1) {
-      throw new BadRequestException('libroId tiene que ser un numero entero positivo');
+    if (
+      typeof libroId !== 'number' ||
+      !Number.isInteger(libroId) ||
+      libroId < 1
+    ) {
+      throw new BadRequestException(
+        'libroId tiene que ser un numero entero positivo',
+      );
     }
+
     const [libros, prestamos] = await this.traerTodo();
 
     // 2 · ¿Existe el libro?
     const libro = libros.find((l) => l.id === libroId);
-    if (!libro) throw new NotFoundException(`no existe el libro ${libroId}`);
 
-    // 3 · ¿Queda algun ejemplar? Esta es una regla de negocio, no de seguridad.
-    const enPrestamo = prestamos.filter((p) => p.libroId === libroId && !p.devuelto).length;
+    if (!libro) {
+      throw new NotFoundException(`no existe el libro ${libroId}`);
+    }
+
+    // 3 · ¿Queda algun ejemplar?
+    const enPrestamo = prestamos.filter(
+      (p) => p.libroId === libroId && !p.devuelto,
+    ).length;
+
     if (enPrestamo >= libro.ejemplares) {
-      throw new ConflictException(`no quedan ejemplares de "${libro.titulo}"`);
+      throw new ConflictException(
+        `no quedan ejemplares de "${libro.titulo}"`,
+      );
     }
 
     const hoy = new Date();
-    const dia = (n: number) => new Date(hoy.getTime() + n * 86400000).toISOString().slice(0, 10);
-    return this.enviar<Prestamo>('POST', this.prestamosUrl, {
-      libroId,
-      usuarioSub: sub,          // sale del TOKEN, no del cuerpo de la peticion
-      desde: dia(0),
-      hasta: dia(14),
-      devuelto: false,
-    });
+
+    const dia = (n: number) =>
+      new Date(hoy.getTime() + n * 86400000)
+        .toISOString()
+        .slice(0, 10);
+
+    return this.enviar<Prestamo>(
+      'POST',
+      this.prestamosUrl,
+      {
+        libroId,
+        usuarioSub: sub,
+        desde: dia(0),
+        hasta: dia(14),
+        devuelto: false,
+      },
+      authorization,
+    );
   }
 
-  async devolver(sub: string, id: number): Promise<Prestamo> {
+  async devolver(
+    sub: string,
+    id: number,
+    authorization?: string,
+  ): Promise<Prestamo> {
     const [, prestamos] = await this.traerTodo();
+
     const prestamo = prestamos.find((p) => p.id === id);
 
     // Si no existe, o si existe pero es de otro, la respuesta es la MISMA: 404.
     if (!prestamo || prestamo.usuarioSub !== sub) {
       throw new NotFoundException(`no existe el prestamo ${id}`);
     }
-    if (prestamo.devuelto) throw new ConflictException(`el prestamo ${id} ya estaba devuelto`);
 
-    return this.enviar<Prestamo>('DELETE', `${this.prestamosUrl}/${id}`);
+    if (prestamo.devuelto) {
+      throw new ConflictException(
+        `el prestamo ${id} ya estaba devuelto`,
+      );
+    }
+
+    return this.enviar<Prestamo>(
+      'DELETE',
+      `${this.prestamosUrl}/${id}`,
+      undefined,
+      authorization,
+    );
   }
 }
